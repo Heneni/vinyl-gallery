@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🎵 Vinyl Gallery - Interactive 3D Music Experience</title>
+    <meta name="description" content="Immersive 3D vinyl album gallery with WebGL Three.js navigation">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            overflow: hidden;
+            background: linear-gradient(135deg, #0a0a0f, #1a1a2e);
+            color: #ffffff;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            cursor: crosshair;
+        }
+        
+        #loading {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: radial-gradient(circle, #1a1a2e 0%, #0a0a0f 100%);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            transition: opacity 0.5s ease;
+        }
+        
+        #loading h1 {
+            font-size: 3em;
+            font-weight: 300;
+            margin-bottom: 20px;
+            background: linear-gradient(45deg, #ff6b6b, #4ecdc4, #45b7d1);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            animation: pulse 2s ease-in-out infinite alternate;
+        }
+        
+        @keyframes pulse {
+            from { opacity: 0.8; }
+            to { opacity: 1; }
+        }
+        
+        .progress-container {
+            width: 400px;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+            overflow: hidden;
+            margin: 20px 0;
+        }
+        
+        .progress-bar {
+            height: 100%;
+            background: linear-gradient(90deg, #ff6b6b, #4ecdc4);
+            width: 0%;
+            transition: width 0.3s ease;
+            border-radius: 3px;
+        }
+        
+        .ui-panel {
+            position: fixed;
+            background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 16px;
+            color: white;
+            font-size: 14px;
+            z-index: 100;
+        }
+        
+        #instructions {
+            top: 20px; left: 20px;
+            max-width: 320px;
+        }
+        
+        #debug {
+            bottom: 20px; left: 20px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+        }
+        
+        #album-overlay {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.95);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 200;
+        }
+        
+        #album-details {
+            background: rgba(20, 20, 30, 0.95);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            padding: 40px;
+            text-align: center;
+            max-width: 600px;
+        }
+        
+        #album-cover {
+            width: 300px;
+            height: 300px;
+            border-radius: 12px;
+            margin: 0 auto 24px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
+        }
+        
+        #close-overlay {
+            position: absolute;
+            top: 20px; right: 30px;
+            background: none;
+            border: none;
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 32px;
+            cursor: pointer;
+            padding: 10px;
+        }
+    </style>
+</head>
+<body>
+    <!-- Loading Screen -->
+    <div id="loading">
+        <h1>🎵 Vinyl Gallery</h1>
+        <p>Loading 3D Music Experience...</p>
+        <div class="progress-container">
+            <div class="progress-bar" id="progress-bar"></div>
+        </div>
+        <p id="loading-text">Initializing Three.js...</p>
+    </div>
+    
+    <!-- UI Panels -->
+    <div id="instructions" class="ui-panel">
+        <strong>🎮 Controls:</strong><br>
+        • Click to enter gallery<br>
+        • <kbd>WASD</kbd> to move<br>
+        • Mouse to look around<br>
+        • Click albums for details<br>
+        • <kbd>ESC</kbd> to exit
+    </div>
+    
+    <div id="debug" class="ui-panel">
+        <div>FPS: <span id="fps">0</span></div>
+        <div>Position: <span id="position">0, 0, 0</span></div>
+        <div>Albums: <span id="albums-loaded">0/34</span></div>
+        <div>Status: <span id="status">Loading...</span></div>
+    </div>
+    
+    <!-- Album Overlay -->
+    <div id="album-overlay">
+        <button id="close-overlay">×</button>
+        <div id="album-details">
+            <img id="album-cover" src="" alt="Album Cover">
+            <h2 id="overlay-title">Album Title</h2>
+            <div id="media-controls">
+                <video id="album-video" controls style="display: none; width: 100%; margin: 20px 0;"></video>
+                <audio id="album-audio" controls style="display: none; width: 100%; margin: 20px 0;"></audio>
+                <p id="media-status">Loading media...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Three.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.158.0/examples/js/controls/PointerLockControls.js"></script>
+    
+    <script>
+        // Production Gallery Application
+        const Gallery = {
+            scene: null,
+            camera: null,
+            renderer: null,
+            controls: null,
+            albums: [],
+            raycaster: new THREE.Raycaster(),
+            clock: new THREE.Clock(),
+            
+            state: {
+                isLocked: false,
+                loadedAssets: 0,
+                totalAssets: 34,
+                isInitialized: false
+            },
+            
+            movement: {
+                keys: { forward: false, backward: false, left: false, right: false, shift: false },
+                velocity: new THREE.Vector3(),
+                speed: 4
+            },
+            
+            stats: { fps: 0, frameCount: 0, lastTime: Date.now() }
+        };
+        
+        // Album data structure
+        const albumData = [];
+        for (let i = 1; i <= 34; i++) {
+            albumData.push({
+                id: i,
+                title: `Vinyl Collection #${i}`,
+                cover: `./assets/covers/art${i.toString().padStart(2, '0')}.jpg`,
+                video: `./assets/media/video${i.toString().padStart(2, '0')}.mp4`,
+                audio: `./assets/media/track${i.toString().padStart(2, '0')}.mp3`
+            });
+        }
+        
+        // Progress tracking
+        function updateProgress(progress, text) {
+            const bar = document.getElementById('progress-bar');
+            const status = document.getElementById('loading-text');
+            if (bar) bar.style.width = progress + '%';
+            if (status) status.textContent = text;
+        }
+        
+        function updateStatus(status) {
+            const el = document.getElementById('status');
+            if (el) el.textContent = status;
+        }
+        
+        // Initialize application
+        function init() {
+            console.log('🎵 Vinyl Gallery v2.0 - Production Initialize');
+            updateProgress(10, 'Creating 3D scene...');
+            
+            try {
+                createScene();
+                updateProgress(25, 'Setting up lighting...');
+                
+                setupLighting();
+                updateProgress(40, 'Building gallery room...');
+                
+                createGalleryRoom();
+                updateProgress(60, 'Creating album collection...');
+                
+                createAlbumCollection();
+                updateProgress(75, 'Setting up controls...');
+                
+                setupControls();
+                updateProgress(85, 'Configuring interactions...');
+                
+                setupEventListeners();
+                updateProgress(95, 'Starting render loop...');
+                
+                startRenderLoop();
+                Gallery.state.isInitialized = true;
+                
+                updateProgress(100, 'Gallery ready!');
+                setTimeout(hideLoadingScreen, 1000);
+                updateStatus('Click to enter');
+                
+            } catch (error) {
+                console.error('❌ Gallery initialization failed:', error);
+                updateStatus('Failed: ' + error.message);
+                updateProgress(0, 'Error: ' + error.message);
+            }
+        }
+        
+        function createScene() {
+            Gallery.scene = new THREE.Scene();
+            Gallery.scene.background = new THREE.Color(0x0a0a0f);
+            Gallery.scene.fog = new THREE.Fog(0x0a0a0f, 10, 50);
+            
+            Gallery.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
+            Gallery.camera.position.set(0, 1.6, 10);
+            
+            Gallery.renderer = new THREE.WebGLRenderer({ antialias: true });
+            Gallery.renderer.setSize(window.innerWidth, window.innerHeight);
+            Gallery.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            Gallery.renderer.shadowMap.enabled = true;
+            Gallery.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            
+            document.body.appendChild(Gallery.renderer.domElement);
+        }
+        
+        function setupLighting() {
+            const ambientLight = new THREE.AmbientLight(0x404040, 0.4);
+            Gallery.scene.add(ambientLight);
+            
+            const mainLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            mainLight.position.set(10, 10, 5);
+            mainLight.castShadow = true;
+            Gallery.scene.add(mainLight);
+            
+            const fillLight = new THREE.DirectionalLight(0x4466aa, 0.3);
+            fillLight.position.set(-5, 8, -2);
+            Gallery.scene.add(fillLight);
+        }
+        
+        function createGalleryRoom() {
+            // Floor
+            const floor = new THREE.Mesh(
+                new THREE.PlaneGeometry(20, 20),
+                new THREE.MeshLambertMaterial({ color: 0x2a2a2a })
+            );
+            floor.rotation.x = -Math.PI / 2;
+            floor.receiveShadow = true;
+            Gallery.scene.add(floor);
+            
+            // Walls
+            const wallMaterial = new THREE.MeshLambertMaterial({ color: 0x1a1a2e });
+            
+            const backWall = new THREE.Mesh(new THREE.PlaneGeometry(20, 12), wallMaterial);
+            backWall.position.set(0, 6, -10);
+            Gallery.scene.add(backWall);
+        }
+        
+        function createAlbumCollection() {
+            const albumGeometry = new THREE.BoxGeometry(0.95, 0.95, 0.03);
+            
+            // Album positions - 3 rows
+            const positions = [];
+            
+            // Row 1 - 12 albums
+            for (let i = 0; i < 12; i++) {
+                positions.push({ x: -7.5 + (i * 1.3), y: 1.0, z: -7.5 });
+            }
+            
+            // Row 2 - 12 albums
+            for (let i = 0; i < 12; i++) {
+                positions.push({ x: -7.5 + (i * 1.3), y: 2.5, z: -8.0 });
+            }
+            
+            // Row 3 - 10 albums
+            for (let i = 0; i < 10; i++) {
+                positions.push({ x: -6.5 + (i * 1.3), y: 4.0, z: -8.5 });
+            }
+            
+            // Create albums
+            positions.forEach((pos, index) => {
+                if (index >= albumData.length) return;
+                
+                const album = new THREE.Mesh(
+                    albumGeometry,
+                    new THREE.MeshLambertMaterial({ color: 0x444444 })
+                );
+                album.position.copy(pos);
+                album.rotation.x = -Math.PI * 8 / 180;
+                album.castShadow = true;
+                album.userData = { albumId: index + 1, isAlbum: true };
+                
+                Gallery.scene.add(album);
+                Gallery.albums.push(album);
+                
+                // Create fallback cover
+                createFallbackCover(album, index + 1);
+            });
+        }
+        
+        function createFallbackCover(album, albumNumber) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 512;
+            canvas.height = 512;
+            const ctx = canvas.getContext('2d');
+            
+            // Gradient background
+            const gradient = ctx.createRadialGradient(256, 256, 50, 256, 256, 256);
+            const colors = ['#ff6b6b', '#4ecdc4', '#45b7d1', '#f9ca24', '#6c5ce7'];
+            gradient.addColorStop(0, colors[albumNumber % colors.length]);
+            gradient.addColorStop(1, '#2c2c54');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, 512, 512);
+            
+            // Album info
+            ctx.fillStyle = 'white';
+            ctx.font = 'bold 36px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('VINYL', 256, 200);
+            ctx.font = 'bold 64px Arial';
+            ctx.fillText(`#${albumNumber}`, 256, 280);
+            
+            // Apply texture
+            const texture = new THREE.CanvasTexture(canvas);
+            album.material.map = texture;
+            album.material.needsUpdate = true;
+            
+            Gallery.state.loadedAssets++;
+            updateAssetCounter();
+        }
+        
+        function updateAssetCounter() {
+            const counter = document.getElementById('albums-loaded');
+            if (counter) counter.textContent = `${Gallery.state.loadedAssets}/${Gallery.state.totalAssets}`;
+        }
+        
+        function setupControls() {
+            if (THREE.PointerLockControls) {
+                Gallery.controls = new THREE.PointerLockControls(Gallery.camera, document.body);
+                Gallery.scene.add(Gallery.controls.getObject());
+                
+                Gallery.controls.addEventListener('lock', () => {
+                    Gallery.state.isLocked = true;
+                    document.getElementById('instructions').style.opacity = '0.3';
+                    updateStatus('Exploring gallery');
+                });
+                
+                Gallery.controls.addEventListener('unlock', () => {
+                    Gallery.state.isLocked = false;
+                    document.getElementById('instructions').style.opacity = '1';
+                    updateStatus('Click to enter');
+                });
+            }
+        }
+        
+        function setupEventListeners() {
+            document.body.addEventListener('click', (event) => {
+                if (!Gallery.state.isLocked && Gallery.controls) {
+                    Gallery.controls.lock();
+                } else if (Gallery.state.isLocked) {
+                    checkAlbumClick();
+                }
+            });
+            
+            document.addEventListener('keydown', (event) => {
+                switch(event.code) {
+                    case 'KeyW': case 'ArrowUp': Gallery.movement.keys.forward = true; break;
+                    case 'KeyS': case 'ArrowDown': Gallery.movement.keys.backward = true; break;
+                    case 'KeyA': case 'ArrowLeft': Gallery.movement.keys.left = true; break;
+                    case 'KeyD': case 'ArrowRight': Gallery.movement.keys.right = true; break;
+                    case 'ShiftLeft': case 'ShiftRight': Gallery.movement.keys.shift = true; break;
+                    case 'Escape':
+                        if (document.getElementById('album-overlay').style.display === 'flex') {
+                            closeAlbumOverlay();
+                        }
+                        break;
+                }
+            });
+            
+            document.addEventListener('keyup', (event) => {
+                switch(event.code) {
+                    case 'KeyW': case 'ArrowUp': Gallery.movement.keys.forward = false; break;
+                    case 'KeyS': case 'ArrowDown': Gallery.movement.keys.backward = false; break;
+                    case 'KeyA': case 'ArrowLeft': Gallery.movement.keys.left = false; break;
+                    case 'KeyD': case 'ArrowRight': Gallery.movement.keys.right = false; break;
+                    case 'ShiftLeft': case 'ShiftRight': Gallery.movement.keys.shift = false; break;
+                }
+            });
+            
+            window.addEventListener('resize', () => {
+                Gallery.camera.aspect = window.innerWidth / window.innerHeight;
+                Gallery.camera.updateProjectionMatrix();
+                Gallery.renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+            
+            document.getElementById('close-overlay').addEventListener('click', closeAlbumOverlay);
+        }
+        
+        function checkAlbumClick() {
+            Gallery.raycaster.setFromCamera(new THREE.Vector2(0, 0), Gallery.camera);
+            const intersects = Gallery.raycaster.intersectObjects(Gallery.albums);
+            
+            if (intersects.length > 0) {
+                const albumId = intersects[0].object.userData.albumId;
+                openAlbumOverlay(albumId);
+            }
+        }
+        
+        function openAlbumOverlay(albumId) {
+            const albumInfo = albumData[albumId - 1];
+            document.getElementById('overlay-title').textContent = albumInfo.title;
+            document.getElementById('album-overlay').style.display = 'flex';
+        }
+        
+        function closeAlbumOverlay() {
+            document.getElementById('album-overlay').style.display = 'none';
+        }
+        
+        function updateMovement() {
+            if (!Gallery.state.isLocked || !Gallery.controls) return;
+            
+            const delta = Gallery.clock.getDelta();
+            const speed = Gallery.movement.keys.shift ? 8 : Gallery.movement.speed;
+            
+            Gallery.movement.velocity.set(0, 0, 0);
+            
+            if (Gallery.movement.keys.forward) Gallery.movement.velocity.z -= speed * delta;
+            if (Gallery.movement.keys.backward) Gallery.movement.velocity.z += speed * delta;
+            if (Gallery.movement.keys.left) Gallery.movement.velocity.x -= speed * delta;
+            if (Gallery.movement.keys.right) Gallery.movement.velocity.x += speed * delta;
+            
+            Gallery.controls.moveRight(Gallery.movement.velocity.x);
+            Gallery.controls.moveForward(-Gallery.movement.velocity.z);
+            Gallery.camera.position.y = 1.6;
+        }
+        
+        function updateDebugInfo() {
+            Gallery.stats.frameCount++;
+            const now = Date.now();
+            
+            if (now - Gallery.stats.lastTime >= 1000) {
+                Gallery.stats.fps = Gallery.stats.frameCount;
+                Gallery.stats.frameCount = 0;
+                Gallery.stats.lastTime = now;
+                document.getElementById('fps').textContent = Gallery.stats.fps;
+            }
+            
+            const pos = Gallery.camera.position;
+            document.getElementById('position').textContent = 
+                `${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)}`;
+        }
+        
+        function startRenderLoop() {
+            function animate() {
+                requestAnimationFrame(animate);
+                updateMovement();
+                updateDebugInfo();
+                Gallery.renderer.render(Gallery.scene, Gallery.camera);
+            }
+            animate();
+        }
+        
+        function hideLoadingScreen() {
+            const loading = document.getElementById('loading');
+            loading.style.opacity = '0';
+            setTimeout(() => loading.style.display = 'none', 500);
+        }
+        
+        // Initialize when ready
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', init);
+        } else {
+            init();
+        }
+        
+        // Global exposure for debugging
+        window.VinylGallery = Gallery;
+        
+        console.log('🎵 Vinyl Gallery - Production Ready');
+    </script>
+</body>
+</html>
